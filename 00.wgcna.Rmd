@@ -1,0 +1,572 @@
+---
+title: "wgcna"
+output: html_document
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE, results='hide',fig.keep='all', message=FALSE)
+options(stringsAsFactors = F)
+library(tidyverse)
+library(WGCNA)
+library(data.table)
+library(reshape2)
+library(DESeq2)
+enableWGCNAThreads()
+```
+
+
+```{r funcs}
+runDESeq <- function(expr, colData){
+  colData = colData %>% mutate(SEX = factor(SEX))
+  dds = DESeqDataSetFromMatrix(countData = expr, colData = colData, design = ~SEX)
+  rownames(dds) = genes$Name
+  keep = rowSums(counts(dds))>=10
+  dds = dds[keep,]
+  dds = DESeq(dds)
+  vsd = varianceStabilizingTransformation(dds, blind = TRUE)
+  return(t(assay(vsd)))
+}
+
+filterGenes <- function(datExpr){
+  gsg = goodSamplesGenes(datExpr, verbose = 3)
+  gsg$allOK
+  if(!gsg$allOK){
+    if(sum(!gsg$goodGenes)>0)
+      printFlush(paste0("Removing genes:", paste(names(datExpr)[!gsg$goodGenes], collapse = ", ")))
+    if(sum(!gsg$goodSamples)>0)
+      printFlush(paste0("Removing samples:", paste(names(datExpr)[!gsg$goodSamples], collapse = ", ")))
+    datExpr = datExpr[gsg$goodSamples, gsg$goodGenes]
+  }
+  return(datExpr)
+}
+
+pst <- function(datExpr){
+  powers = c(c(1:10), seq(12, 20, 2))
+  sft = pickSoftThreshold(datExpr, networkType = "signed",
+                          powerVector = powers, verbose = 5)
+  par(mar=c(5,5,1,1))
+  par(mfrow = c(1,2))
+  cex1 = 0.9
+  plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3]) * sft$fitIndices[,2],
+       xlab = "Soft Threshold (power)", ylab = "Scale Free Topology Model Fit, signed R^2",
+       type = "n", main = paste("Scale indenpendence"))
+  text(sft$fitIndices[,1], -sign(sft$fitIndices[,3]) * sft$fitIndices[,2],
+       labels = powers, cex = cex1, col = "red")
+  abline(h = .9, col = "red")
+  plot(sft$fitIndices[,1], sft$fitIndices[,5],
+       xlab = "Soft Threshold (power)", ylab = "Mean Connectivity",
+       type = "n", main = paste("Mean Connectivity"))
+  text(sft$fitIndices[,1], sft$fitIndices[,5], cex = cex1, col = "red")
+  return(sft)
+}
+
+runWGCNA <- function(datExpr, power, seed=1234){
+  cor <- WGCNA::cor
+  nets = blockwiseModules(datExpr, maxBlockSize = 5000,
+                          power = power, 
+                          TOMType = "signed", minModuleSize = 10,
+                          reassignThreshold = 0, mergeCutHeight = .25,
+                          numericLabels = TRUE,
+                          saveTOMs = FALSE,
+                          verbose = 3,
+                          randomSeed = seed)
+  netsColors = labels2colors(nets$colors)
+  plotDendroAndColors(nets$dendrograms[[1]], netsColors[nets$blockGenes[[1]]],
+                      "Module colors", 
+                      dendroLabels = FALSE, hang = .03,
+                      addGuide = TRUE, guideHang = .05)
+  return(nets)
+}
+```
+
+```{r loadsamples}
+samples = merge(fread("expression/GTEx_Analysis_v8_Annotations_SampleAttributesDS2.txt"),
+                fread("expression/GTEx_Analysis_v8_Annotations_SubjectPhenotypesDS.txt"))
+```
+
+#### 1. Brain amygdala
+
+```{r amygdalaWGCNA1, cache=TRUE}
+expr_ba = fread("expression/Brain_Amygdala_death1_2.gct")
+genes = expr_ba[,1:2]
+expr_ba = expr_ba[,-c(1:2)]
+rownames(expr_ba) = genes$Name
+
+colData_ba = samples %>% dplyr::filter(SAMPID %in% colnames(expr_ba))
+rownames(colData_ba) = colData_ba$SAMPID
+
+datExpr_ba = runDESeq(expr = expr_ba, colData = colData_ba) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r amygdalaWGCNA2, cache=TRUE}
+sft_ba = pst(datExpr = datExpr_ba)
+```
+
+- Build WGCNA network
+
+```{r amygdalaWGCNA3, cache=TRUE}
+net_ba = runWGCNA(datExpr = datExpr_ba, power = 12)
+```
+```{r amygdalaWGCNA4}
+tibble::enframe(net_ba$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Amygdala.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 2. Brain hippocampus
+
+```{r hippocampusWGCNA1, cache=TRUE}
+expr_bhi = fread("expression/Brain_Hippocampus_death1_2.gct")
+genes = expr_bhi[,1:2]
+expr_bhi = expr_bhi[,-c(1:2)]
+rownames(expr_bhi) = genes$Name
+
+colData_bhi = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bhi))
+rownames(colData_bhi) = colData_bhi$SAMPID
+
+datExpr_bhi = runDESeq(expr = expr_bhi, colData = colData_bhi) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r hippocampusWGCNA2, cache=TRUE}
+sft_bhi = pst(datExpr = datExpr_bhi)
+```
+
+- Build WGCNA network
+
+```{r hippocampusWGCNA3, cache=TRUE}
+net_bhi = runWGCNA(datExpr = datExpr_bhi, power = 12)
+```
+```{r hippocampusWGCNA4}
+tibble::enframe(net_bhi$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Hippocampus.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 3. Brain hypothalamus
+
+```{r hypothalamusWGCNA1, cache=TRUE}
+expr_bhy = fread("expression/Brain_Hypothalamus_death1_2.gct")
+genes = expr_bhy[,1:2]
+expr_bhy = expr_bhy[,-c(1:2)]
+rownames(expr_bhy) = genes$Name
+
+colData_bhy = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bhy))
+rownames(colData_bhy) = colData_bhy$SAMPID
+
+datExpr_bhy = runDESeq(expr = expr_bhy, colData = colData_bhy) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r hypothalamusWGCNA2, cache=TRUE}
+sft_bhy = pst(datExpr = datExpr_bhy)
+```
+
+- Build WGCNA network
+
+```{r hypothalamusWGCNA3, cache=TRUE}
+net_bhy = runWGCNA(datExpr = datExpr_bhy, power = 12)
+```
+```{r hypothalamusWGCNA4}
+tibble::enframe(net_bhy$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Hypothalamus.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 4. Brain cortex
+
+```{r cortexWGCNA1, cache=TRUE}
+expr_bco = fread("expression/Brain_Cortex_death1_2.gct")
+genes = expr_bco[,1:2]
+expr_bco = expr_bco[,-c(1:2)]
+rownames(expr_bco) = genes$Name
+
+colData_bco = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bco))
+rownames(colData_bco) = colData_bco$SAMPID
+
+datExpr_bco = runDESeq(expr = expr_bco, colData = colData_bco) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r cortexWGCNA2, cache=TRUE}
+sft_bco = pst(datExpr = datExpr_bco)
+```
+
+- Build WGCNA network
+
+```{r cortexWGCNA3, cache=TRUE}
+net_bco = runWGCNA(datExpr = datExpr_bco, power = 12)
+```
+```{r cortexWGCNA4}
+tibble::enframe(net_bco$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Cortex.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 5. Brain Frontal cortex
+
+```{r FrontalWGCNA1, cache=TRUE}
+expr_bfc = fread("expression/Brain_FrontalCortex_death1_2.gct")
+genes = expr_bfc[,1:2]
+expr_bfc = expr_bfc[,-c(1:2)]
+rownames(expr_bfc) = genes$Name
+
+colData_bfc = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bfc))
+rownames(colData_bfc) = colData_bfc$SAMPID
+
+datExpr_bfc = runDESeq(expr = expr_bfc, colData = colData_bfc) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r FrontalWGCNA2, cache=TRUE}
+sft_bfc = pst(datExpr = datExpr_bfc)
+```
+
+- Build WGCNA network
+
+```{r FrontalWGCNA3, cache=TRUE}
+net_bfc = runWGCNA(datExpr = datExpr_bfc, power = 12)
+```
+```{r FrontalWGCNA4}
+tibble::enframe(net_bfc$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Frontal_Cortex.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 6. Brain Anterior cingulate cortex
+
+```{r anteriorWGCNA1, cache=TRUE}
+expr_bacc = fread("expression/Brain_Anteriorcingulatecortex_death1_2.gct")
+genes = expr_bacc[,1:2]
+expr_bacc = expr_bacc[,-c(1:2)]
+rownames(expr_bacc) = genes$Name
+
+colData_bacc = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bacc))
+rownames(colData_bacc) = colData_bacc$SAMPID
+
+datExpr_bacc = runDESeq(expr = expr_bacc, colData = colData_bacc) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r anteriorWGCNA2, cache=TRUE}
+sft_bacc = pst(datExpr = datExpr_bacc)
+```
+
+- Build WGCNA network
+
+```{r anteriorWGCNA3, cache=TRUE}
+net_bacc = runWGCNA(datExpr = datExpr_bacc, power = 12)
+```
+```{r anteriorWGCNA4}
+tibble::enframe(net_bacc$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Anterior_Cingulate_Cortex.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 7. Brain caudate
+
+```{r caudateWGCNA1, cache=TRUE}
+expr_bca = fread("expression/Brain_Caudate_death1_2.gct")
+genes = expr_bca[,1:2]
+expr_bca = expr_bca[,-c(1:2)]
+rownames(expr_bca) = genes$Name
+
+colData_bca = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bca))
+rownames(colData_bca) = colData_bca$SAMPID
+
+datExpr_bca = runDESeq(expr = expr_bca, colData = colData_bca) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r caudateWGCNA2, cache=TRUE}
+sft_bca = pst(datExpr = datExpr_bca)
+```
+
+- Build WGCNA network
+
+```{r caudateWGCNA3, cache=TRUE}
+net_bca = runWGCNA(datExpr = datExpr_bca, power = 12)
+```
+```{r caudateWGCNA4}
+tibble::enframe(net_bca$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Caudate.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 8. Brain cerebellar hemisphere
+
+```{r cerebellarWGCNA1, cache=TRUE}
+expr_bch = fread("expression/Brain_CerebellarHemisphere_death1_2.gct")
+genes = expr_bch[,1:2]
+expr_bch = expr_bch[,-c(1:2)]
+rownames(expr_bch) = genes$Name
+
+colData_bch = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bch))
+rownames(colData_bch) = colData_bch$SAMPID
+
+datExpr_bch = runDESeq(expr = expr_bch, colData = colData_bch) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r cerebellarWGCNA2, cache=TRUE}
+sft_bch = pst(datExpr = datExpr_bch)
+```
+
+- Build WGCNA network
+
+```{r cerebellarWGCNA3, cache=TRUE}
+net_bch = runWGCNA(datExpr = datExpr_bch, power = 12)
+```
+```{r cerebellarWGCNA4}
+tibble::enframe(net_bch$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Cerebellar_Hemisphere.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 9. Brain cerebellum
+
+```{r cerebellumWGCNA1, cache=TRUE}
+expr_bce = fread("expression/Brain_Cerebellum_death1_2.gct")
+genes = expr_bce[,1:2]
+expr_bce = expr_bce[,-c(1:2)]
+rownames(expr_bce) = genes$Name
+
+colData_bce = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bce))
+rownames(colData_bce) = colData_bce$SAMPID
+
+datExpr_bce = runDESeq(expr = expr_bce, colData = colData_bce) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r cerebellumWGCNA2, cache=TRUE}
+sft_bce = pst(datExpr = datExpr_bce)
+```
+
+- Build WGCNA network
+
+```{r cerebellumWGCNA3, cache=TRUE}
+net_bce = runWGCNA(datExpr = datExpr_bce, power = 12)
+```
+```{r cerebellumWGCNA4}
+tibble::enframe(net_bce$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Cerebellum.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 10. Brain nucleus accumbens
+
+```{r nucleusWGCNA1, cache=TRUE}
+expr_bna = fread("expression/Brain_Nucleusaccumbens_death1_2.gct")
+genes = expr_bna[,1:2]
+expr_bna = expr_bna[,-c(1:2)]
+rownames(expr_bna) = genes$Name
+
+colData_bna = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bna))
+rownames(colData_bna) = colData_bna$SAMPID
+
+datExpr_bna = runDESeq(expr = expr_bna, colData = colData_bna) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r nucleusWGCNA2, cache=TRUE}
+sft_bna = pst(datExpr = datExpr_bna)
+```
+
+- Build WGCNA network
+
+```{r nucleusWGCNA3, cache=TRUE}
+net_bna = runWGCNA(datExpr = datExpr_bna, power = 12)
+```
+```{r nucleusWGCNA4}
+tibble::enframe(net_bna$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Nucleus_Accumbens.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 11. Brain putamen
+
+```{r putamenWGCNA1, cache=TRUE}
+expr_bp = fread("expression/Brain_Putamen_death1_2.gct")
+genes = expr_bp[,1:2]
+expr_bp = expr_bp[,-c(1:2)]
+rownames(expr_bp) = genes$Name
+
+colData_bp = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bp))
+rownames(colData_bp) = colData_bp$SAMPID
+
+datExpr_bp = runDESeq(expr = expr_bp, colData = colData_bp) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r putamenWGCNA2, cache=TRUE}
+sft_bp = pst(datExpr = datExpr_bp)
+```
+
+- Build WGCNA network
+
+```{r putamenWGCNA3, cache=TRUE}
+net_bp = runWGCNA(datExpr = datExpr_bp, power = 12)
+```
+```{r putamenWGCNA4}
+tibble::enframe(net_bp$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Putamen.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+#### 12. Brain substantia nigra
+
+```{r substantiaWGCNA1, cache=TRUE}
+expr_bsn = fread("expression/Brain_Substantianigra_death1_2.gct")
+genes = expr_bsn[,1:2]
+expr_bsn = expr_bsn[,-c(1:2)]
+rownames(expr_bsn) = genes$Name
+
+colData_bsn = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bsn))
+rownames(colData_bsn) = colData_bsn$SAMPID
+
+datExpr_bsn = runDESeq(expr = expr_bsn, colData = colData_bsn) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r substantiaWGCNA2, cache=TRUE}
+sft_bsn = pst(datExpr = datExpr_bsn)
+```
+
+- Build WGCNA network
+
+```{r substantiaWGCNA3, cache=TRUE}
+net_bsn = runWGCNA(datExpr = datExpr_bsn, power = 12)
+```
+```{r substantiaWGCNA4}
+tibble::enframe(net_bsn$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Substantia_Nigra.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+---
+
+#### 13. Brain spinal cord
+
+```{r spinalWGCNA1, cache=TRUE}
+expr_bsc = fread("expression/Brain_Spinalcord_death1_2.gct")
+genes = expr_bsc[,1:2]
+expr_bsc = expr_bsc[,-c(1:2)]
+rownames(expr_bsc) = genes$Name
+
+colData_bsc = samples %>% dplyr::filter(SAMPID %in% colnames(expr_bsc))
+rownames(colData_bsc) = colData_bsc$SAMPID
+
+datExpr_bsc = runDESeq(expr = expr_bsc, colData = colData_bsc) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r spinalWGCNA2, cache=TRUE}
+sft_bsc = pst(datExpr = datExpr_bsc)
+```
+
+- Build WGCNA network
+
+```{r spinalWGCNA3, cache=TRUE}
+net_bsc = runWGCNA(datExpr = datExpr_bsc, power = 12)
+```
+```{r spinalWGCNA4}
+tibble::enframe(net_bsc$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Brain_Spinal_Cord.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+---
+
+#### 14. Nerve tibial
+
+```{r NerveWGCNA1, cache=TRUE}
+expr_nt = fread("expression/Nerve_Tibial_death1_2.gct")
+genes = expr_nt[,1:2]
+expr_nt = expr_nt[,-c(1:2)]
+rownames(expr_nt) = genes$Name
+
+colData_nt = samples %>% dplyr::filter(SAMPID %in% colnames(expr_nt))
+rownames(colData_nt) = colData_nt$SAMPID
+
+datExpr_nt = runDESeq(expr = expr_nt, colData = colData_nt) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r NerveWGCNA2, cache=TRUE}
+sft_nt = pst(datExpr = datExpr_nt)
+```
+
+- Build WGCNA network
+
+```{r NerveWGCNA3, cache=TRUE}
+net_nt = runWGCNA(datExpr = datExpr_nt, power = 12)
+```
+```{r NerveWGCNA4}
+tibble::enframe(net_nt$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Nerve_Tibial.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
+---
+
+#### 15. Whole blood
+
+```{r WholeWGCNA1, cache=TRUE}
+expr_wb = fread("expression/WholeBlood_death1_2.gct")
+genes = expr_wb[,1:2]
+expr_wb = expr_wb[,-c(1:2)]
+rownames(expr_wb) = genes$Name
+
+colData_wb = samples %>% dplyr::filter(SAMPID %in% colnames(expr_wb))
+rownames(colData_wb) = colData_wb$SAMPID
+
+datExpr_wb = runDESeq(expr = expr_wb, colData = colData_wb) %>% filterGenes(.)
+```
+
+- Pick soft threshold
+
+```{r WholeWGCNA2, cache=TRUE}
+sft_wb = pst(datExpr = datExpr_wb)
+```
+
+- Build WGCNA network
+
+```{r WholeWGCNA3, cache=TRUE}
+net_wb = runWGCNA(datExpr = datExpr_wb, power = 12)
+```
+```{r WholeWGCNA4}
+tibble::enframe(net_wb$colors, name = "gene", value = "module") %>% 
+  merge(., genes, by.x = "gene", by.y = "Name") %>% 
+  write.table(., file = "expression_modules/Whole_Blood.modules.tsv", sep = "\t",
+              row.names = F, quote = F)
+```
+
